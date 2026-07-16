@@ -150,53 +150,88 @@ function door(cell: Cell, pos: THREE.Vector3, normal: THREE.Vector3, scale = 1):
 }
 function link(a: Doorway, b: Doorway) { a.link = b; b.link = a; }
 
-// ── the layout ──────────────────────────────────────────────────────────────
+// ── the layout — PROCEDURAL, regenerated every load ──────────────────────────
+//  A scramble-graph: a small hub with the pelican, plus a pool of SHORT halls
+//  and 4-way junctions scattered far apart in world space. Every doorway is
+//  paired at RANDOM, so the topology is genuinely impossible and un-mappable —
+//  four lefts don't bring you home, a door you just came through now leads
+//  somewhere else, and the pelican room keeps ambushing you (the hub's 4 doors
+//  give it high degree, so you fall back into it constantly — smaller each time).
+//  Cells with an even door-count each => the global pairing is always clean.
+const R = () => Math.random();
+
+/** outward horizontal normal helpers */
+const NRM = {
+  n: new THREE.Vector3(0, 0, 1), s: new THREE.Vector3(0, 0, -1),
+  e: new THREE.Vector3(1, 0, 0), w: new THREE.Vector3(-1, 0, 0),
+};
+
 export function buildWorld(): World {
   mats();
   const root = new THREE.Group();
   const lights: THREE.Object3D[] = [];
   const cells: Cell[] = [];
+  const free: Doorway[] = [];
 
-  // ROOM — the pelican chamber, 20×20. Doorways on south (to the loop) and
-  // north (loop returns here). Cells live in their own far-apart regions.
-  const roomG = new THREE.Group(); root.add(roomG);
-  const room = makeCell('room', new THREE.Vector2(-10, -10), new THREE.Vector2(10, 10),
-    { s: [0], n: [0] }, roomG, lights);
-  cells.push(room);
-  const pelican = makePelican();
-  pelican.position.set(0, 0, 0);
-  roomG.add(pelican);
+  // ── hub: pelican chamber (14×14), a door on every wall ──
+  const hubG = new THREE.Group(); root.add(hubG);
+  const hub = makeCell('hub', new THREE.Vector2(-7, -7), new THREE.Vector2(7, 7),
+    { n: [0], s: [0], e: [0], w: [0] }, hubG, lights);
+  cells.push(hub);
+  const pelican = makePelican(); pelican.position.set(0, 0, 0); hubG.add(pelican);
+  free.push(
+    door(hub, new THREE.Vector3(0, 0, 7), NRM.n), door(hub, new THREE.Vector3(0, 0, -7), NRM.s),
+    door(hub, new THREE.Vector3(7, 0, 0), NRM.e), door(hub, new THREE.Vector3(-7, 0, 0), NRM.w),
+  );
 
-  // three corridors, each parked 400+ units away so nothing overlaps
-  const corr = (id: string, ox: number, oz: number, gaps: any): Cell => {
+  // ── procedural cells, each parked in its own far-apart 700-unit tile ──
+  const N = 11;
+  for (let i = 0; i < N; i++) {
+    const gx = (1 + (i % 4)) * 700 * (i % 2 ? 1 : -1);
+    const gz = (1 + Math.floor(i / 4)) * 700 * (i % 3 === 0 ? 1 : -1);
     const g = new THREE.Group(); root.add(g);
-    const min = new THREE.Vector2(ox - 2.2, oz - 14), max = new THREE.Vector2(ox + 2.2, oz + 14);
-    const c = makeCell(id, min, max, gaps, g, lights);
-    cells.push(c); return c;
+    const junction = R() < 0.42;
+    if (junction) {
+      // a small 4-way junction room (even door count = 4)
+      const h = 3.4;
+      const min = new THREE.Vector2(gx - h, gz - h), max = new THREE.Vector2(gx + h, gz + h);
+      const c = makeCell(`j${i}`, min, max, { n: [gx], s: [gx], e: [gz], w: [gz] }, g, lights);
+      cells.push(c);
+      free.push(
+        door(c, new THREE.Vector3(gx, 0, max.y), NRM.n), door(c, new THREE.Vector3(gx, 0, min.y), NRM.s),
+        door(c, new THREE.Vector3(max.x, 0, gz), NRM.e), door(c, new THREE.Vector3(min.x, 0, gz), NRM.w),
+      );
+    } else {
+      // a SHORT straight hall (2 doors), random orientation
+      const vert = R() < 0.5, half = 2.2, len = 4.5 + R() * 2.5;
+      const min = vert ? new THREE.Vector2(gx - half, gz - len) : new THREE.Vector2(gx - len, gz - half);
+      const max = vert ? new THREE.Vector2(gx + half, gz + len) : new THREE.Vector2(gx + len, gz + half);
+      if (vert) {
+        const c = makeCell(`h${i}`, min, max, { n: [gx], s: [gx] }, g, lights); cells.push(c);
+        free.push(door(c, new THREE.Vector3(gx, 0, max.y), NRM.n), door(c, new THREE.Vector3(gx, 0, min.y), NRM.s));
+      } else {
+        const c = makeCell(`h${i}`, min, max, { e: [gz], w: [gz] }, g, lights); cells.push(c);
+        free.push(door(c, new THREE.Vector3(max.x, 0, gz), NRM.e), door(c, new THREE.Vector3(min.x, 0, gz), NRM.w));
+      }
+    }
+  }
+
+  // ── scramble-wire: shuffle all doors, pair them, sprinkle scale-portals ──
+  for (let i = free.length - 1; i > 0; i--) { const j = (R() * (i + 1)) | 0; [free[i], free[j]] = [free[j], free[i]]; }
+  for (let i = 0; i + 1 < free.length; i += 2) {
+    const a = free[i], b = free[i + 1];
+    link(a, b);
+    const r = R();
+    if (r < 0.30) { a.scale = 0.76; b.scale = 1; }        // shrink one way
+    else if (r < 0.52) { a.scale = 1; b.scale = 0.76; }   // shrink the other
+    else if (r < 0.62) { a.scale = 1.34; b.scale = 1; }   // a rarer grow-door
+  }
+
+  // start in the hub, facing the pelican
+  return {
+    root, cells, pelican, lights,
+    start: { cell: hub, pos: new THREE.Vector3(0, 0, 5), yaw: 0 },
   };
-  const c1 = corr('c1', 500, 0, { s: [500], n: [500] });
-  const c2 = corr('c2', 1000, 0, { s: [1000], n: [1000] });
-  const c3 = corr('c3', 1500, 0, { s: [1500], n: [1500] });
-
-  // doorways (all normals cardinal)
-  const S = new THREE.Vector3(0, 0, -1), N = new THREE.Vector3(0, 0, 1);
-  const roomS = door(room, new THREE.Vector3(0, 0, -10), S, 0.62); // shrink entering the ring
-  const roomN = door(room, new THREE.Vector3(0, 0, 10), N);
-
-  const c1s = door(c1, new THREE.Vector3(500, 0, -14), S);
-  const c1n = door(c1, new THREE.Vector3(500, 0, 14), N);
-  const c2s = door(c2, new THREE.Vector3(1000, 0, -14), S);
-  const c2n = door(c2, new THREE.Vector3(1000, 0, 14), N);
-  const c3s = door(c3, new THREE.Vector3(1500, 0, -14), S);
-  const c3n = door(c3, new THREE.Vector3(1500, 0, 14), N);
-
-  // the impossible ring:  room.S → c1.N → c1.S → c2.N → c2.S → c3.N → c3.S → room.N
-  link(roomS, c1n);
-  link(c1s, c2n);
-  link(c2s, c3n);
-  link(c3s, roomN);
-
-  return { root, cells, start: { cell: room, pos: new THREE.Vector3(0, 0, 6), yaw: Math.PI }, pelican, lights };
 }
 
 export { H as CEIL_H, DOOR_W, WALL };

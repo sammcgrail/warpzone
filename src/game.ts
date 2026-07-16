@@ -6,7 +6,7 @@ import { buildWorld, type Cell, type Doorway, type World, DOOR_W, WALL } from '.
 import { Audio } from './audio';
 
 const EYE = 1.7;          // eye height at scale 1
-const SPEED = 3.4;        // walk speed (world u/s) at scale 1
+const SPEED = 7.2;        // walk speed (world u/s) — brisk; Sam wanted it faster
 const RADIUS = 0.34;      // collision radius at scale 1
 const PITCH_MAX = Math.PI / 2 - 0.05;
 
@@ -169,7 +169,10 @@ export class Game {
 
   private step(dt: number) {
     const [f, s] = this.moveVec();
-    const sp = SPEED * this.scale * dt;
+    // movement only PARTLY scales with size — fully proportional felt like a crawl
+    // when shrunk. Eye height + near-clip still use raw scale, so looming is intact.
+    const ms = 0.45 + 0.55 * this.scale;
+    const sp = SPEED * ms * dt;
     const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw);
     // forward = (-sinY, 0, -cosY); right = (cosY, 0, -sinY)
     let nx = this.pos.x + (-sinY * f + cosY * s) * sp;
@@ -190,7 +193,7 @@ export class Game {
 
     // the pelican is solid: orbit it, don't clip it. Its footprint is world-fixed
     // (~2.2u plinth); the player's radius scales, so you can get closer when tiny.
-    if (c.id === 'room') {
+    if (c.id === 'hub') {
       const px = this.world.pelican.position.x, pz = this.world.pelican.position.z;
       const pr = 2.2 + RADIUS * this.scale;
       let dx = nx - px, dz = nz - pz;
@@ -245,7 +248,7 @@ export class Game {
     this.yaw = Math.atan2(-fwd.x, -fwd.z);
     // scale + bookkeeping
     this.scale *= d.scale;
-    this.scale = Math.max(0.02, Math.min(1, this.scale));
+    this.scale = Math.max(0.05, Math.min(1.15, this.scale)); // allow grow-doors past 1
     if (d.scale !== 1) { this.laps++; }
     this.cell = link.cell;
     this.last.copy(this.pos); // so we don't instantly re-cross
