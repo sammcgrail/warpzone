@@ -1,0 +1,10 @@
+services:
+  warpzone:
+    build: .
+    container_name: warpzone
+    network_mode: bridge
+    restart: unless-stopped
+    ports:
+      - "20067:8080"
+    mem_limit: 96m
+    cpus: 0.3
